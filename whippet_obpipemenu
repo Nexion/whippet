@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# whippet_obpipemenu : Example Openbox pipe menu of most frequently used applications known to Whippet
+# Copyright © 2014-2015 Douglas McFadzean
+# Updated 2015-06-29 for Whippet >= 2.2.0
+
+# Initialization
+db="$HOME/.config/whippet/whippet.sqlite"  # Whippet database
+num='limit 20'  # Number of favourites to be listed (set to null for all)
+pic="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"  # freedesktop.org paths
+pic=${pic//::/:}; pic=${pic%:}; pic="$HOME/.icons:${pic//\/share//share/icons}:/usr/share/pixmaps"  # Paths on which icons may be found
+mapfile -t dic <<<"${pic//:/$'\n'}"  # Store paths as array of directories
+
+# Menu creation
+# Read most frequently used applications from database and look up icon paths for databased applications; store app|icon in array
+mapfile -t apps <<<"$(sqlite3 "$db" "select usage.app,apps.icon from usage left join apps using (app) where usage.disp order by usage.freq desc,usage.time desc $num;")"
+echo '<openbox_pipe_menu>'
+for app in "${apps[@]}"; do  # Loop over the applications
+  ap=${app%%|*}; ic=${app##*|}  # Determine application and icon path
+  if [[ $ap =~ ^.+\ {2}\(.+\)$ ]]; then  # Desktop application rather than databased applicaton?
+    id=${ap##*(}; id=${id%)}.desktop;  mapfile -t inf <<<"$(whippet -K "$id")"  # Get path, Name, Icon information for desktop_file_ID
+    if [[ ${inf[2]} == /* ]]; then ic="${inf[2]}"  # Has icon path been specified in desktop file?
+    # Otherwise desktop file only gave icon basename[.ext], so find its path - just accept the first local, pixmap, hicolor or gnome version found
+    else ic=$(find "${dic[@]}" -regextype posix-egrep -regex ".+/${inf[2]%.*}\.(png|xpm|svg)$" | grep -E '(local|pixmaps|hicolor|gnome)' -m 1)
+    fi
+  fi
+  echo "<item label='$ap' icon='$ic'><action name='Execute'><command>whippet -o '$ap'</command></action></item>"  # Create menu item
+done
+echo '</openbox_pipe_menu>'

@@ -1,0 +1,113 @@
+2016-06-04 v2.2.8: Add extra check in function Desktop for null bad key value returned by sed from malformed desktop files.
+
+2016-06-02 v2.2.7: Reject any desktop application file in function lsap which does not have .desktop extension, per standard.
+                   Improve processing and checking of application and mimeapps.list directories.
+
+2016-05-27 v2.2.6: Fix Run function: never execute command with any objects unless %f|u|F|U specified.
+
+2016-05-26 v2.2.5: Fix minor syntax errors reported by https://www.shellcheck.net.
+
+2015-12-01 v2.2.4: Support the selection of multiple applications per dmenu version 4.6. Execute multiple applications selected from
+                   the -d, -k and -c menus as if they were specified by the -e option.
+
+2015-08-30 v2.2.3: Environment variable $DMENU_CMD replaces variable $DMENU for specifying default dmenu command line.
+
+2015-08-20 v2.2.2: New function norphans deletes usage records for defunct applications; functions refreche and tidydb modified accordingly.
+                   Control character and -C option parameter 3 now also deletes usage records for defunct applications, but no longer exits after.
+
+2015-08-10 v2.2.1: Remove references to dmenu2 from README and script dudo as dmenu2 development appears to have stalled and dmenu2 package is
+                   no longer available from Arch Linux user repository.
+
+2015-06-29 v2.2.0: Extend function Run, option -o and example pipe menu to handle applications of the form: desktop_Name‧‧(desktop_basename)[v]
+                   Extend function hist with new variables $itype and $item. Use SQLite 'collate binary' for case sensitive type and app fields.
+                   Fix bug in tidydb function when desktop application uninstalled but still present in usage table and cache.
+                   Modify arguments for functions creche and lsap, removing reliance on $cache variable. Reset $cache to 1 when cache cleared.
+                   Clarify distinction between clearing cache (removing files) and refreshing cache (rebuilding files).
+                   Man page explains usage data and embedded spaces. Add undocumented option -z which writes debug information to stderr. 
+
+2015-06-24 v2.1.3: New functions refreche and xdisp to aid refreshing of cache and display of applications in menus.
+                   New cache control value 3 to refresh cache and then immediately exit (useful for initialization via 'whippet -C 3').
+                   Exec key in whippet.desktop now runs Whippet with -c option rather than -d option.
+
+2015-06-20 v2.1.2: New function lsap combines previous ldbap and ldesk functions. Cache handling streamlined and cache files renamed.
+                   Cache directory now created immediately after options processed to prevent cache error when tidying database.
+                   Database version incremented to 2.1 and error message issued by tidydb function when database version is not current.
+                   Application usage history backup is now additionally ordered by recency.
+                   Man page now retained in text form for source; gzipped in PKGBUILD instead.
+                   In whippet_obpipemenu: also accept first icon found in local directory; allow for Icon=basename.ext in desktop file,
+                   and additionally order favorites by recency.
+
+2015-06-16 v2.1.1: Explanations of boolean database fields improved on man page.
+
+2015-06-14 v2.1.0: Renamed database field hid to disp, to avoid confusion with so-called hidden desktop files. Field disp added to table usage.
+                   Add option -C, variable $cache and -d|-k|-c menu control characters 0|1|2 to control caching of application listings to /tmp.
+                   Add function creche to re/create cache directory and modify functions ldbap and ldesk to utilize cache.
+                   Fixed bugs affecting no-display applications; logic was incomplete and if opening no objects had been inadvertently removed.
+                   Value of key NoDisplay is now returned as ${desktop[3]} by the -K option.
+                   Several clarifications added to man page, including guidance on which database tables should be configured or edited.
+
+2015-06-04 v2.0.2: Fix regressions regarding error handling: reintroduce checking of return codes especially from Run function.
+                   Increase error return codes in Run to 2, and exit script with appropriate code wherever possible.
+
+2015-06-03 v2.0.1: File urls are now treated as local files (as xdg-open does) and %xx strings are resolved to characters in the file paths.
+                   Thanks to assaf758 for suggesting this change for consistency with xdg-open.
+
+2015-06-03 v2.0.0: Database format changed: usage data extended to include desktop applications and moved to new table usage from table apps.
+                   Keep track of database version by adding field vers to table tidy. Tidying database also removes usage records for
+                   redundant applications which have no database entry or desktop file.
+                   New functions ldbap and ldesk list databased and desktop applications. Function Desktop now returns array of (path,Name,Icon).
+                   Functions hist and tidydb replace tally and vacuum functions respectively. Configuration variable autotidy replaces autovac. 
+                   Now update application usage history only for non-association menu choices and regardless of return code from application.
+                   Add option -c to combine -d and -k menus. Add -K option to print information for a desktop_file_ID.
+                   Add -t (tidy) option to replace -v (vacuum) option. Option -U now runs a tidy after restoring usage data.
+                   Sample Openbox pipe menu script whippet_obpipemenu rewritten to also accommodate desktop applications.
+
+2015-05-01 v1.8.1: Use $pgm dynamically in messages. Allow run field in table apps to specify objects after desktop file; strings may be quoted.
+
+2015-04-22 v1.8.0: Replace help information in script with more detailed man page; add --version option.
+
+2015-04-08 v1.7.6: Expand README file and include example Openbox pipe menu script: whippet_obpipemenu
+
+2015-04-07 v1.7.5: Add optional icon field to apps table in database, especially for use with Openbox pipe menus.
+
+2015-04-01 v1.7.3: Fixed bug affecting mimetypes containing '+'; escape mimetype before using as regex in sed.
+
+2015-03-19 v1.7.2: Allow spaces in desktop_file_IDs by temporarily converting them to character $zp (default ¬).
+
+2015-03-18 v1.7.1: Add variable $version; allow menu prompt to contain arbitrary string by using: eval $menu
+
+2015-03-18 v1.7.0: For associations by mimetype, now find associated applications and default applications strictly according to
+                   freedesktop.org standards at: http://standards.freedesktop.org/mime-apps-spec/latest/index.html
+                   Remove function Default and add function blist; rename arrays storing freedesktop.org paths and directories.
+
+2015-03-16 v1.6.2: Enhance definition of icon.
+
+2015-03-15 v1.6.1: Rebrand as Whippet; replace icon for program.
+
+2015-02-05 v1.6.0: Add boolean field stop to table types to stop any further type testing if current test is passed.
+
+2015-01-31 v1.5.1: Mention usage.sql in help information. Remove NOT NULL constraint from time field when creating apps table.
+                   Add $view to configuration file and allow viewing of desktop file selected from -m or -k menu by appending v to input.
+
+2015-01-27 v1.5.0: Remove table hist from database; now store application usage data in fields freq and time in table apps.
+                   Add option -k to open objects with any desktop application on system. Add options -u/-U to backup/restore application
+                   usage data and last vacuum time from/to database.
+
+2015-01-12 v1.4.1: Fixed bug affecting application and association search paths when XDG environment variables are set.
+
+2015-01-08 v1.4.0: Add -M option and new function Default to open objects with the default freedesktop.org mimetype application. Add -A option to
+                   confirm default action. Refactor associations dependent code, notably utilizing the case command's ;;& clause terminator.
+
+2015-01-06 v1.3.0: Add -m option to display menu of freedesktop.org's mimetype associations instead. Help information extended and clarified.
+                   Calls to function Desktop much accelerated by setting global variable $desktop instead of using command substitution.
+
+2015-01-05 v1.2.2: Reindex database after vacuuming. Reduce default number of days before automatic database vacuum. Edit help information.
+                   Software licensing changed to Mozilla Public License 2.0 from GPLv3.
+
+2014-12-29 v1.2.1: Make spelling of program consistent in messages.
+
+2014-12-23 v1.2.0: Run function simplified using shell parameter expansions to resolve %field codes. Functions ask_pass and join_cmd dropped.
+                   Add boolean nop column to apps database table to exclude any processing of application; redefine boolean hid column to hide
+                   application from menu when no objects are being opened.
+
+2014-12-13 v1.1.4: Initial release version.

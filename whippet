@@ -1,0 +1,372 @@
+#!/usr/bin/env bash
+# Whippet : Opens file and url objects with applications associated by name or mimetype
+# Arch dependencies: bash, dmenu, sqlite, libnotify, file [perl-file-mimeinfo, sqlitebrowser, sudo, gxmessage]
+
+# Copyright © 2014-2016 Douglas McFadzean
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+# If a copy of the MPL was not distributed with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+
+pgm="whippet"; version=2.2.8; dbvers=2.1  # Program name and version; database version
+version()
+{ cat <<VERSION
+${pgm^} version $version
+Copyright © 2014-2016 Douglas McFadzean
+Distributed under the terms of the Mozilla Public License version 2.0
+VERSION
+}
+
+usage()
+{ cat <<USAGE
+Usage: $pgm [-a|-A|-m|-M|-k|-d|-c|-o app] [-D file] [-t] [-C ctl] [obj ...]
+               [-e app ...] [-D file] [-t]
+               [-u|-U] [-K app] [-h|--help|--version]
+USAGE
+}
+
+Err()
+{ # Displays error message $1 [and exits with code $2]
+notify-send -u critical "${pgm^} error" "$1" &
+[[ -n $2 ]] && exit $2
+}
+
+esed() { sed -r 's:[][(){}|\.^$?*+/;]:\\&:g' <<<"$1"; }  # Outputs string $1 with regex metacharacters and / or ; escaped for sed
+
+xdisp() { if (( $1 )); then disp='disp'; nodisp='|NoDisplay=true'; else unset disp nodisp; fi; }  # Do not display apps in menus per boolean $1
+
+creche()
+{ # Creates cache directory per boolean $1 after removing any existing cache files if $1>1
+(( $1 > 1 )) && rm -f "$cached/"*.cache  # Remove existing cache files
+if (( $1 )); then  # Create cache directory
+  if [[ ! -d $cached ]]; then mkdir "$cached"; if (( $? )); then cache=0; Err "Caching disabled as unable to create its directory"; fi; fi
+fi
+}
+
+norphans()
+{ # Deletes usage records for defunct databased and desktop applications
+local app
+sqlite3 "$db" "delete from usage where app not like '%  (%)' and app not in (select app from apps where not nop);"  # Databased applications
+while read app; do sqlite3 "$db" "delete from usage where app='$app' collate binary;"  # Desktop applications
+done <<<"$(sqlite3 "$db" "select app from usage where app like '%  (%)';" | grep -vxF "$(lsap 1 0)")"  # Do not use cache for comparison!
+}
+
+refreche()
+{ # Refreshes cache and deletes usage records for defunct applications
+creche 2; xdisp 0; lsap 0 2; lsap 1 2; xdisp 1; lsap 0 2; lsap 1 2; norphans; cache=1  # Finally reset caching flag
+}
+
+lsap()
+{ # Lists databased or desktop applications per boolean $1, using cache per boolean $2 and listing cache only if $2=1
+local file=/dev/stdout; (( dbg )) && echo "Debug lsap: cache=$cache, disp=$disp, 1=$1, 2=$2" 1>&2
+if (( $2 )); then file="$cached/$1_$disp.cache"; if [[ -r $file ]]; then cat "$file"; return; fi; fi  # Using cache
+if (( $1 )); then  # Desktop applications: non-hidden and displayable
+  grep -vF "$(echo NULL; grep -l -R -m 1 -E "^(Hidden=true$nodisp)" "${dapp[@]}")" <<<"$(grep -R -m 1 -e '^Name=' "${dapp[@]}")" \
+    | sed -r '/.desktop:/!d; s|^.*/applications/||; s|(.+)/(.+:Name=)|\1-\2|; s|(.+)\.desktop:Name=(.+$)|\2  (\1)|' | awk '!a[$0]++' >"$file"
+else  # Databased applications: not nop and displayable
+  sqlite3 "$db" "select app from apps where not nop ${disp:+and $disp};" >"$file"
+fi
+(( $2 == 1 )) && cat "$file"  # Actually list from cache (or just leave it filled)?
+}
+
+blist()
+{ # Applies blacklist $2 to list $1 to return $result (no embedded spaces permitted)
+local b i; result=; for i in $1; do for b in $2;do [[ $b == $i ]] && continue 2; done; result="$result $i"; done
+}
+
+Desktop()
+{ # Returns ${desktop[]} as (path,Name,Icon,NoDisplay) of desktop file $1=desktop_file_ID found in application directories ${dapp[]}
+desktop=(); local sub base dir path id="${1//$zp/ }" i Name Icon Hidden NoDisplay  # Revert to true spaces in desktop_file_ID
+sub=${id%%-*}; base=${id#*-}; [[ $sub == "$base" ]] && sub=    # Get possible subdir and basename of desktop_file_ID
+for dir in "${dapp[@]}"; do                                    # Loop over application directories
+  [[ -d "$dir" ]] || continue
+  path="$dir/$id"; (( dbg )) && echo "Debug Desktop: path=$path, sub=$sub, base=$base" 1>&2
+  if [[ ! -r $path ]]; then                                    # name.desktop not found
+    if [[ -z $sub ]]; then continue
+    else path="$dir/$sub/$base"; [[ ! -r $path ]] && continue  # subdir/name.desktop not found
+    fi
+  fi
+  mapfile -t desktop <<<"$(sed -n '/^\[Desktop Entry\]/,/^\[/{/^Name=\|^Icon=\|^Hidden=\|^NoDisplay/p}' "$path")"  # Extract keys of interest
+  if [[ -n ${desktop[0]} ]]; then
+    for i in "${desktop[@]}"; do eval "${i%%=*}"='${i#*=}'; done  # Set key variables ensuring values are preserved without tokenization
+    if [[ $Hidden == true ]]; then desktop=()  # If desktop file is hidden return null
+    else desktop=("$path" "$Name" "$Icon" "$NoDisplay")  # Return array of key values
+    fi
+  else desktop=()  # Quirk: sed can return null array element from bad desktop file
+  fi
+  return
+done
+}
+
+Run()
+{ # Runs item $1={app_name|desktop_file_ID|path/app.desktop|desktop_Name‧‧(desktop_basename)[v]}, opening objects $2 ...
+local vw=0 cmd keys Type Name Icon Hidden Exec Path Terminal URL Object val i a
+#
+# Determine type of item
+item="$1"; shift  # Save item name and set positional parameters as objects
+if [[ $item =~ ^.+\ {2}\(.+\)v?$ ]]; then itype=2  # Type: desktop_Name‧‧(desktop_basename)[v]
+  if [[ $item == *v ]]; then vw=1; item=${item%v}; fi  # Flag that desktop file is to be viewed
+  app=${item##*(}; app=${app%)}.desktop  # Get desktop_file_ID
+elif [[ ! $item =~ .+\.desktop$ ]];  then itype=1  # Type: app_name
+  app=$(sqlite3 "$db" "select run,disp from apps where not nop and app='$item' collate binary;")  # Find how to run item
+  disp=${app##*$dlm}; app=${app%$dlm*}  # Save value of disp field and get app
+  if [[ -z $app ]]; then Err "Application '$item' not found in database"; return 2; fi
+  # Reset positional parameters according to run field: {command|{desktop_file_ID|path/app.desktop} [object ...]}
+  eval a=("$app"); if [[ ${a[0]} == *.desktop ]]; then set -- "${a[@]:1}" "$@"; app="${a[0]}"; fi  # Resolve any quoting if desktop file
+else itype=0; app="$item"  # Type: desktop_file_ID|path/app.desktop
+fi
+(( dbg)) && echo "Debug Run: item=$item, vw=$vw, app=$app, itype=$itype, #=$#, 1=$1, 2=$2, 3=$3" 1>&2
+#
+# Determine command line to run
+if [[ $app == *.desktop ]]; then  # Application is desktop file
+  if [[ ! $app == */*.desktop ]]; then  # Resolve its path if missing
+    Desktop "$app"; if [[ -n ${desktop[0]} ]]; then app=${desktop[0]}; else Err "Desktop application '$item' not found or hidden"; return 2; fi
+  fi
+  (( vw )) && eval exec "$view"  # View desktop file?
+  i="$IFS"; IFS=$'\n'  # Get keys of interest from first group [Desktop Entry] in desktop file
+  keys=($(sed -n '/^\[Desktop Entry\]/,/^\[/{/^Type=\|^Name=\|^Icon=\|^Hidden=\|^NoDisplay=\|^Exec=\|^Path=\|^Terminal=\|^URL=/p}' "$app")); IFS="$i"
+  if (( ! ${#keys[@]} )); then Err "Cannot read keys for desktop application '$app'"; return 2; fi
+  for i in "${keys[@]}"; do eval "${i%%=*}"='${i#*=}'; done  # Set key variables ensuring values are preserved without tokenization
+  if [[ $Hidden == true ]]; then Err "Desktop application '$app' is hidden"; return 2; fi  # As if desktop file didn't exist
+  if [[ $Type == Link ]]; then Exec="$open $URL"; elif [[ $Terminal == true ]]; then Exec="$term $Exec"; fi  # Open link, or in terminal
+  cmd="$Exec"
+else cmd="$app"  # Application is direct command
+fi
+#
+# Prompt for password first?
+if [[ -n $askpass ]] && [[ $(eval echo "$cmd") == sudo+( )@(-*A*|*--askpass*) ]]; then $askpass || return 1; fi
+# Expand %field codes in command line
+cmd=${cmd//%%/_%_}  # Temporarily isolate %% -> _%_
+if [[ -z $Icon ]]; then val=; else val="--icon '$Icon'"; fi; cmd=${cmd//%i/$val}  # %i
+val="'$Name'"; cmd=${cmd//%c/$val}  # %c
+val="'$(readlink -ens "$app")'"; cmd=${cmd//%k/$val}  # %k
+val='"$Object"'; cmd=${cmd//%[fu]/$val}  # %f,%u
+val='"$@"'; cmd=${cmd//%[FU]/$val}  # %F,%U 
+cmd="${cmd//_%_/%} &"  # Finally _%_ -> %
+if [[ -n $Path ]]; then if ! cd "$Path"; then Err "Cannot change to working directory '$Path'"; return 2; fi; fi
+if [[ $cmd =~ '"$@"' ]]; then eval "$cmd"  # Execute %F|U command with string of all objects
+elif [[ $cmd =~ '"$Object"' ]]; then
+  if (( $# )); then for Object in "$@"; do eval "$cmd"; done  # Execute %f|u command for each object
+  else eval "${cmd/'"$Object"'/}"  # Execute %f|u command alone as no objects specified
+  fi
+else
+  eval "$cmd"  # Execute command not containing %f|F|u|U
+fi
+}
+
+hist()
+{ # Writes usage history for application $item with exit code $1, display flag $disp or $NoDisplay
+if (( itype && ! $1 )); then  # Only write history for menu-type applications with zero exit status
+  if (( itype > 1 )); then if [[ $NoDisplay == true ]]; then disp=0; else disp=1; fi; fi  # If desktop app then set boolean $disp from NoDisplay
+  sqlite3 "$db" "INSERT or REPLACE into usage (app,disp,freq,time) values ('$item','$disp',coalesce((select freq + 1 from usage where app='$item' collate binary),1),CURRENT_TIMESTAMP);"
+fi
+exit $1
+}
+
+tidydb()
+{ # Tidies database, also timestamping and checking database version
+local vers
+creche 2; (( cache == 2 )) && cache=1  # 1) Clear the cache and unset clearing flag
+norphans  # 2) Delete usage records for defunct databased and desktop applications
+vers=$(sqlite3 "$db" 'select vers from tidy;'); [[ $vers != $dbvers ]] && Err "Forcing database version to $dbvers from $vers; check schema"
+sqlite3 "$db" "delete from tidy; insert into tidy (time,vers) values(CURRENT_TIMESTAMP,$dbvers); vacuum; reindex;"  # 3) Vacuum the database
+(( $? )) && Err "Tidy of database '$db' failed" 2
+}
+
+
+# Initialize defaults and configure
+dlm='\|'; zp='¬'                                             # SQL column delimiter and temporary space replacement character in desktop_file_IDs
+de="${XDG_CURRENT_DESKTOP:-none}"; de=${de%%:*}; de=${de,,}  # Get current desktop environment (lowercase and just take first if a list)
+                                                             # freedesktop.org paths to find application .desktop and mimeapps.list files
+papp="${XDG_DATA_HOME:-$HOME/.local/share}:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+pmal="${XDG_CONFIG_HOME:-$HOME/.config}:${XDG_CONFIG_DIRS:-/etc/xdg}:$papp"
+cached="/tmp/.${pgm}_${USER}"                                # Cache directory
+act=A                                                        # Default action per commandline options: A|a|M|m|d|k|c
+prompt="Application"                                         # Menu prompt for application name (may contain $variables)
+menu='${DMENU_CMD:-dmenu -i} -p "$prompt"'                   # Menu command
+order='f'                                                    # Ordering of menu of all applications: f(requency)|r(ecency)|n(ame)|N(ame reverse)
+autotidy=30                                                  # Days between automatic tidies of database (set negative to disable)
+cache=1                                                      # Cache management: 0|1|2|3 = disable|enable|clear+enable|refresh+exit
+term='xterm -hold -e'                                        # Terminal command
+open='xdg-open'                                              # General XDG opener command
+askpass='sudo -vA'                                           # Sudo command to get password once via helper program $SUDO_ASKPASS
+mime=('m=$(file -Lb --mime-type "$n")')                      # Array of commands to determine mimetype $m of object $n in format: major/minor
+mimefail='^(application/octet-stream|binary|cannot open)'    # Regex to detect failed mimetype determinations ($m is set to ?)
+view='gxmessage -title "${desktop[0]}" -center -file "${desktop[0]}"'  # Command to view .desktop files
+cfgdir="${XDG_CONFIG_HOME:-$HOME/.config}/$pgm"              # Configuration directory
+eval cfgfil="\${${pgm^^}_CONF:-$cfgdir/$pgm.conf}"           # Configuration file; override if required with environment variable $<PGM>_CONF
+usgfil="$cfgdir/usage.sql"                                   # Backup file for application usage data
+db="$cfgdir/$pgm.sqlite"                                     # SQLite database file
+[[ -r "$cfgfil" ]] && . "$cfgfil"                            # Source configuration file if it exists
+
+# Parse command line
+[[ $1 == '--help'    ]] && usage   && exit
+[[ $1 == '--version' ]] && version && exit
+while getopts 'aAmMdkco:eD:tC:uUKhz' OPTION
+do
+  case $OPTION in
+    a) act=a ;;
+    A) act=A ;;
+    m) act=m ;;
+    M) act=M ;;
+    d) act=d ;;
+    k) act=k ;;
+    c) act=c ;;
+    o) act=o; app="$OPTARG" ;;
+    e) act=e ;;
+    D) db="$OPTARG" ;;
+    t) tdy=1 ;;
+    C) cache="$OPTARG" ;;
+    u) usg=b ;;
+    U) usg=r ;;
+    K) act=K ;;
+    h) usage; exit ;;
+    z) dbg=1 ;;  # Debug boolean
+    *) Err "Invalid option '$*'" 1 ;;
+  esac
+done
+shift $((OPTIND - 1))
+[[ $act == c ]] && act=dk  # Combined menu of databased and desktop applications
+
+# Store valid application directories in array, allowing for extra colons and trailing slashes
+mapfile -t dapp <<<"${papp//:/$'\n'}"
+mapfile -t dapp <<<"$(for d in "${dapp[@]}"; do [[ -z $d ]] && continue; a=${d%/}/applications; [[ ! -d $a ]] && continue; echo "$a"; done)"
+# Store mimeapps.list directories in array, allowing for extra colons and trailing slashes
+mapfile -t dmal <<<"${pmal//:/$'\n'}"
+mapfile -t dmal <<<"$(for d in "${dmal[@]}"; do [[ -z $d ]] && continue; m=${d%/}; [[ ${m##*/} == share ]] && m="$m/applications"; [[ ! -d $m ]] && continue; echo "$m"; done)"
+
+# Initialize caching
+if (( cache == 3 )); then refreche  # Refresh cache and delete usage records for defunct applications?
+else creche "$cache"; (( cache == 2 )) && cache=1  # Create cache directory as required and unset clearing flag
+fi
+
+# Print (path,Name,Icon,NoDisplay) for a non-hidden desktop_file_ID
+if [[ $act == K ]]; then Desktop "$1"; for i in "${desktop[@]}"; do echo "$i"; done; exit; fi
+
+# Check whether to tidy an existing SQLite database or create the database
+if [[ -r $db ]]; then
+  if (( tdy )); then tidydb  # Immediate tidy
+  elif (( autotidy >= 0 )); then  # Timed tidy
+    days=$(sqlite3 "$db" "select cast(julianday('now')-julianday(time) as int) from tidy limit 1;")
+    (( days >= autotidy )) && tidydb
+  fi
+else
+  sqlite3 "$db" "create table types(type text primary key not null unique, test text not null, wt integer not null default 0, stop integer not null default 0, rem text); \
+                 create table apps(app text primary key not null unique, run text not null, nop integer not null default 0, disp integer not null default 1, icon text, rem text); \
+                 create table assoc(type text not null, app text not null, wt integer not null default 0, rem text); \
+                 create table usage(app text primary key not null unique, disp integer not null default 1, freq integer not null default 0, time text not null); \
+                 create table tidy(time text primary key not null, vers real not null); \
+                 insert into tidy (time,vers) values (CURRENT_TIMESTAMP,$dbvers);"
+fi
+
+# Backup or restore application usage history
+case $usg in
+  b) sqlite3 "$db" "select 'insert into usage (app,disp,freq,time) values ('''||app||''','''||disp||''','''||freq||''','''||time||''');' from usage order by freq desc,time desc;" >"$usgfil" ;;
+  r) (echo "delete from usage;"; cat "$usgfil") | sqlite3 "$db"; tidydb ;;
+esac
+
+# Direct actions with no dependency on associations
+# -------------------------------------------------
+(( ! $# )) && xdisp 1  # If not opening any objects then exclude no-display applications from menus
+case $act in
+   d) cond="where ${disp:+$disp and} app not like '%  (%)'" ;;&  # Databased applications
+   k) cond="where ${disp:+$disp and} app like '%  (%)'"     ;;&  # Desktop   applications
+  dk) cond="${disp:+where $disp}"                           ;;&  # All       applications
+  d|k|dk) # Open objects with any application registered in database and/or any (non-hidden, displayable) desktop application
+     while true; do
+       case "$order" in  # Change order of menu: r(ecency)|f(requency)|n(name)|N(ame reverse)
+         r) fav=$(sqlite3 "$db" "select app from usage $cond order by time desc,freq desc;") ;;&  # Favourites by recency
+         f) fav=$(sqlite3 "$db" "select app from usage $cond order by freq desc,time desc;") ;;&  # Favourites by frequency
+       f|r) app=$(([[ -n $fav ]] && echo "$fav"; \
+              (([[ $act == d* ]] && lsap 0 $cache; [[ $act == *k ]] && lsap 1 $cache) | grep -vxF "$(echo NULL; echo "$fav")")) | eval $menu) ;;
+         n) sort=f  ;;&  # Sort by name
+         N) sort=fr ;;&  # Reverse sort by name
+       n|N) app=$(([[ $act == d* ]] && lsap 0 $cache; [[ $act == *k ]] && lsap 1 $cache) | sort -$sort | eval $menu) ;;
+         *) app=$(([[ $act == d* ]] && lsap 0 $cache; [[ $act == *k ]] && lsap 1 $cache) | eval $menu) ;;  # No ordering of menu
+       esac
+       if [[ -z $app ]]; then exit
+       elif [[ $app =~ ^[012]$ ]]; then cache=$app; creche "$cache"; (( cache == 2)) && cache=1; continue  # Cache: disable, enable or clear+enable
+       elif [[ $app =~ ^[3]$   ]]; then refreche; continue     # Refresh cache and delete usage records for defunct applications
+       elif [[ $app =~ ^[rfnN]$ ]]; then order=$app; continue  # Set ordering of menu
+       fi
+       break
+     done
+     ;;&
+  o|d|k|dk) # Check if multiple applications have been selected from menu
+     mapfile -t appm <<<"$app"  # Read applications into array
+     if (( ${#appm[@]} > 1 )); then msel=y; set -- "${appm[@]}"  # If multiple then set flag and reset positional parameters to apps
+     else Run "$app" "$@"; hist $?  # Otherwise open objects with single application and write usage history before exiting
+     fi
+     ;;
+esac
+# Execute a list of applications
+if [[ $act == e || $msel ]]; then  # Either specified on command line or by multiple selections from menu
+  rc=0; for app in "$@"; do Run "$app"; r=$?; (( r > rc )) && rc=$r; done; exit $rc  # Exit with code of worst error
+fi
+
+# Actions dependent on associations
+# ---------------------------------
+if (( $# )); then n="$1"; else exit; fi  # Need at least first object with name $n to determine associations
+if [[ $n == file://* ]]; then  # file:// -> Decode file urls to produce local file paths
+  for (( i=1; i<=$#; i++ )); do  # For all objects resolve %xx strings to characters 
+    set -- "${@:1:$(( i-1 ))}" "$(printf "$(sed -r 's@^file://@@;s@%([a-f0-9A-F]{2})@\\x\1@g' <<<"${@:$i:1}")")" "${@:$(( i+1 ))}"
+  done; n="$1"
+fi
+if [[ $n =~ ^[[:alpha:]][[:alnum:]+.-]*: ]]; then m="x-scheme-handler/${n%%:*}"  # Non-file url object: determine scheme name hence mimetype
+else  # File object: loop over mimetype determination commands until valid mimetype found, else set to ?
+  for c in "${mime[@]}"; do
+    eval "$c"; if (( $? )) || [[ -z $m ]] || [[ $m =~ $mimefail ]]; then m=?; else break; fi
+  done
+fi
+em=$(esed "$m")  # Escape mimetype for processing by sed
+case $act in
+  m|M) mal=mimeapps.list  # Determine freedesktop.org mimetype associations; convert any spaces in desktop_file_IDs to $zp
+       for dir in "${dmal[@]}"; do [[ -d "$dir" ]] || continue  # Loop over mimeapps.list directories
+         if [[ -z $default ]]; then  # Find default application via algorithm at: http://standards.freedesktop.org/mime-apps-spec/latest/ar01s04.html
+           defs="$(sed -r "/^\[Default Applications\]/,/^\[/!d;/^$em=/!d;s///;s/ /$zp/g;s/;/ /g" "$dir/$de-$mal" "$dir/$mal" 2>/dev/null)"
+           if [[ -n "${defs// }" ]]; then
+             for default in $defs; do Desktop "$default"; [[ -n ${desktop[0]} ]] && break; done  # First valid default?
+           fi
+         fi
+         # Add and remove associations via algorithm at: http://standards.freedesktop.org/mime-apps-spec/latest/ar01s03.html
+         blist "$(sed -r "/^\[Added Associations\]/,/^\[/!d;/^$em=/!d;s///;s/ /$zp/g;s/;/ /g" "$dir/$mal" 2>/dev/null)" "$blist"; apps="$apps $result"
+         blist="$blist $(sed -r "/^\[Removed Associations\]/,/^\[/!d;/^$em=/!d;s///;s/ /$zp/g;s/;/ /g" "$dir/$mal" 2>/dev/null)"
+         if [[ $dir == */applications ]]; then  # Now add other associated applications using cached information
+           capps="$(sed -r "/^$em=/!d;s///;s/ /$zp/g;s/;/ /g" "$dir/mimeinfo.cache" 2>/dev/null)"
+           blist "$capps" "$blist"; apps="$apps $result"; blist="$blist $capps"
+         fi
+       done
+       apps="$default $apps"  # Place default application at start of list; check validity of list and remove any duplicates; format list: Name  (basename)
+       apps=$(for i in $apps; do j=${i//$zp/ }; Desktop "$j"; [[ -n ${desktop[0]} ]] && echo "${desktop[1]}  (${j%.desktop})"; done | awk '!a[$0]++')
+       [[ -z $apps ]] && Err "No mimetype associations found for '$n' ($m)" 2
+       ;;&
+    M) # Open objects with default application (first in list of associated applications)
+       read app <<<"$apps"
+       ;;&
+    m) # Open objects with an application chosen from menu of all associated applications
+       app=$(eval $menu <<<"$apps")
+       case $app in '') exit ;; a) exec notify-send -u low "${pgm^} finds '$n'" "has mimetype: $m" ;; esac
+       ;;&
+  a|A) # Customized associations determined from database
+       mapfile -t types <<<"$(sqlite3 "$db" 'select type,test,stop from types order by wt desc;')"
+       # Loop over array of weighted content types, tests, and stop flags
+       for t in "${types[@]}"; do
+         type=${t%%$dlm*}; stop=${t##*$dlm}; test=${t%$dlm*}; test=${test#*$dlm}  # Get type name, stop flag and test
+         [[ -z $test ]] && continue
+         eval [[ "$test" ]] || continue  # Apply the test
+         [[ -z $type ]] && continue
+         matches="${matches:+$matches,}'$type'"  # Append matching content type to list
+         (( stop )) && break  # Stop testing immediately?
+       done
+       [[ -z $matches ]] && Err "No types match '$n' ($m)" 2
+       ;;&
+    A) # Determine associated application with greatest overall weight (the "default" application)
+       app=$(sqlite3 "$db" "select assoc.app from assoc join types using (type) join apps using (app) where not nop and assoc.type in ($matches) collate binary group by assoc.app order by types.wt desc,assoc.wt desc limit 1;")
+       ;;&
+    a) # Display menu of associated applications, weighted by type then association
+       app=$(sqlite3 "$db" "select assoc.app from assoc join types using (type) join apps using (app) where not nop and assoc.type in ($matches) collate binary group by assoc.app order by types.wt desc,assoc.wt desc;" | eval $menu)
+       case "$app" in '') exit ;; 'a') notify-send -u low "${pgm^} matched '$n' ($m)" "to types: $matches"; exit ;; esac
+       ;;&
+    *) # Open objects with chosen application
+       Run "$app" "$@"; exit $?
+       ;;
+esac

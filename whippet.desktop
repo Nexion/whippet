@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Whippet
+Comment=Opens files and urls with applications associated by name or mimetype
+Terminal=false
+Icon=whippet
+Exec=whippet -c %U
+Categories=Applications;System;Utility;

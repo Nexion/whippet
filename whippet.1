@@ -1,0 +1,295 @@
+.TH WHIPPET 1 "4 June 2016" "Whippet 2.2.8" "Whippet manual"
+.nh
+.SH NAME
+Whippet \- Small, light and runs (programs) fast
+.SH SYNOPSIS
+.B whippet
+[\fIoption\fP ...] [\fIobject\fP ...]
+.SH DESCRIPTION
+.PP
+A launcher and xdg-open replacement for control freaks, utilizing dmenu.
+Opens file and URL objects with applications associated by name and/or mimetype.
+Applications and associations may be customized using an SQLite database.
+.SH OPTIONS
+.TP
+.BI \-a
+Open objects with an application selected from a menu of associations defined
+by the database. Applications in the menu are listed by their name (field
+.I app
+in table
+.IR apps )
+and ordered by their assigned weight. All objects are assumed to be of the same
+type as the first object.
+.br
+Input \fIa\fP to show the mimetype and content types found instead.
+.TP
+.BI \-A
+Open objects with the weightiest associated application defined by the database.
+This is the default object-opening action.
+.TP
+.BI \-d
+Open objects with an application selected from a menu of all the applications
+registered in the database, whether associated or not. Input one of the following
+control characters to order the menu items:
+.RS
+.RS
+.TP
+.I f
+by frequency of usage
+.TP
+.I r
+by recency of usage
+.TP
+.I n
+by name
+.TP
+.I N
+by reverse name
+.RE
+.TP
+Or input one of the following control characters to manage the caching of application listings (also see -C option below):
+.RS
+.TP
+.I 0
+disable caching
+.TP
+.I 1
+enable caching
+.TP
+.I 2
+clear cache and enable caching
+.TP
+.I 3
+refresh cache, enable caching and delete usage records for defunct applications
+.RE
+.RE
+.TP
+.BI \-k
+Open objects with an application selected from a menu of all desktop applications
+on the system. Or, select an application and append \fIv\fP to the input to
+view its desktop file instead. Control characters may also be input per the -d option.
+Desktop applications are displayed in the menu with the format (note embedded two spaces):
+.RS
+.RS
+.br
+desktop_Name‧‧(desktop_basename)
+.RE
+.RE
+.TP
+.BI \-c
+Open objects with an application selected from a combination of the -d and -k menus.
+Control characters may also be input per the -d option.
+.TP
+.BI \-o " app"
+Open objects with a particular application, specified in one of the forms:
+.RS
+.RS
+.br
+app_name (field
+.I app
+in table
+.IR apps )
+.br
+desktop_file_ID
+.br
+path/app.desktop
+.br
+desktop_Name‧‧(desktop_basename)
+.RE
+.RE
+.TP
+.BI \-e " app ..."
+Execute a list of applications (no objects opened) of the above form.
+.TP
+.BI \-D " file"
+Specify an alternative database file.
+.TP
+.BI "-m | -M"
+Instead of using Whippet's databased associations, open objects with an
+application associated by mimetype according to freedesktop.org's standard
+\'Association between MIME types and applications'. Open with the default
+application by specifying the \fB\-M\fP option; or select from a menu of associated
+applications by specifying the \fB\-m\fP option. All objects are assumed to be of the
+same type as the first object.
+.br
+For the \fB\-m\fP menu, input \fIa\fP to show the mimetype found instead. Or, select
+an application and append \fIv\fP to the input to view its desktop file instead.
+.TP
+.BI \-t
+Tidy up the database: clear cache, delete usage records for defunct applications, and vacuum and reindex the database.
+.TP
+.BI \-C " ctl"
+Manage the caching of application listings according to the value of the specified control.
+See -d option for permitted values and their function. If used, the cache will persist as long
+as the /tmp directory. To simply initialize the cache without any further action, issue the
+command:
+.RS
+.RS
+.br
+whippet -C 3
+.RE
+.RE
+.TP
+.BI \-u
+Backup application usage data from the database to the file \fI~/.config/whippet/usage.sql\fP.
+Usage data is maintained for choices made from the -d, -k and -c menus and for applications run
+using the -o option.
+.TP
+.BI \-U
+Restore application usage data from the file \fI~/.config/whippet/usage.sql\fP to the database,
+and then tidy the database.
+.TP
+.BI \-K " app"
+Print file path, and values of Name, Icon and NoDisplay keys for the specified desktop_file_ID.
+.TP
+.BI "-h | --help"
+Print usage synopsis.
+.TP
+.BI \-\-version
+Print version information.
+.SH FILES
+.SS ${XDG_CONFIG_HOME:\-~/.config}/whippet/
+Configuration directory.
+.SS ~/.config/whippet/whippet.conf
+Default configuration file. A sample configuration file is available at
+\fI/usr/share/doc/whippet/whippet.conf\fP and may be copied and customized for the user.
+.SS ~/.config/whippet/whippet.sqlite
+Default SQLite database file, with tables and fields specified below.
+An empty database will be created the first time Whippet is run. Only the tables \fItypes\fP, \fIassoc\fP
+and \fIapps\fP are to be configured by the user. Access table \fIusage\fP only when deleting
+usage records for applications no longer installed (or use the \fB-t\fP option).
+.PP
+.BI types
+.RS 4
+.TP
+.I type
+name of content type
+.TP
+.I test
+definition of type specified as Bash expression which may contain variables:
+.RS
+.RS
+.TP
+.I $n
+name of object
+.TP
+.I $m
+mimetype of first object
+.RE
+.TP
+for example:
+.br
+$m == text/plain || $n =~ .+\\.(txt|lst|log)$
+.RE
+.TP
+.I wt
+weight given to type
+.TP
+.I stop
+1 stops any further type testing if test passed; 0 lets testing continue to detect 
+additional types
+.TP
+.I rem
+remarks
+.RE
+.PP
+.BI assoc
+.RS 4
+.TP
+.I type
+name of content type
+.TP
+.I app
+name of application
+.TP
+.I wt
+weight given to association
+.TP
+.I rem
+remarks
+.RE
+.PP
+.BI apps
+.RS 4
+.TP
+.I app
+name of application; displayed in menus
+.TP
+.I run
+how to run application, in one of these forms:
+.RS
+.RS
+.br
+command (may contain freedesktop.org \fI%field\fP codes)
+.br
+desktop_file_ID [object ...]
+.br
+path/app.desktop [object ...]
+.RE
+.RE
+.TP
+.I nop
+1 excludes application from any processing; 0 always processes application
+.TP
+.I disp
+1 always displays application in (-d, -k and -c) menus; 0 removes application
+from menus when no objects are being opened
+.TP
+.I icon
+icon file for application (use full path for Openbox pipe menus)
+.TP
+.I rem
+remarks
+.RE
+.PP
+.BI usage
+.RS 4
+.TP
+.I app
+databased application: app_name
+.br
+or desktop application: desktop_Name‧‧(desktop_basename)
+.TP
+.I disp
+1 always displays application in (-d, -k and -c) menus; 0 removes application
+from menus when no objects are being opened
+.TP
+.I freq
+number of times application has been run
+.TP
+.I time
+date and time when application last run
+.RE
+.PP
+.BI tidy
+.RS 4
+.TP
+.I time
+date and time when database last tidied
+.TP
+.I vers
+version of database
+.RE
+.SH ENVIRONMENT
+.SS DMENU_CMD
+Specifies default dmenu command line.
+.SS WHIPPET_CONF
+Specifies alternative configuration file.
+.SH "SEE ALSO"
+.PP
+Whippet finds desktop files on the standard <\fIhttp://freedesktop.org\fP> application paths.
+.PP
+Whippet uses the \fIdmenu\fP program to manage its menu; see \fBdmenu\fP(1) and <\fIhttp://suckless.org\fP>.
+.br
+Recent versions of dmenu support the selection of multiple items. If you select multiple applications from
+the menu displayed by the -d, -k or -c option, then the applications will be executed as if they were specified
+by the -e option.
+.PP
+The database may be managed by programs such as \fIDB Browser for SQLite\fP or
+the Firefox browser extension \fISQLite Manager\fP.
+.PP
+Whippet can effectively replace freedesktop.org's \fIxdg\-open\fP command; see \fI/usr/share/doc/whippet/README\fP and \fI/usr/share/doc/whippet/xdg\-open\fP.
+.SH LICENSE
+\fBWhippet\fP is distributed under the terms of the Mozilla Public License version 2.0 <\fIhttp://mozilla.org/MPL/2.0\fP>
+.SH AUTHOR
+Copyright © 2014-2015 Douglas McFadzean <\fIhttp://appstogo.mcfadzean.org.uk\fP>

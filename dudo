@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# dudo : Helps 'sudo --askpass' prompt (with text $1) for a password when $SUDO_ASKPASS=/path/dudo
+# Version 2015-08-30 by Douglas McFadzean
+# Requires dmenu
+# Refs: https://bbs.archlinux.org/viewtopic.php?pid=777137#p777137 and 'man sudo'
+
+m=${DMENU_CMD:-dmenu -i}; p=${1:-Password}
+$m -l 0 -p "$p" -nf red -nb red <&- && echo  # Input nothing and obscure password
